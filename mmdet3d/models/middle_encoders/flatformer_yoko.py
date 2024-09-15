@@ -331,7 +331,7 @@ class FlatFormer(nn.Module):
         num_heads=8,
         num_blocks=2,
         activation="gelu",
-        window_shape=(9, 9, 1),
+        window_shape=(13, 13, 1),
         sparse_shape=(468, 468, 1),
         output_shape=(468, 468),
         pos_temperature=10000,
@@ -370,8 +370,6 @@ class FlatFormer(nn.Module):
 
     @auto_fp16(apply_to=('x',))
     def forward(self, x, coords, batch_size):
-
-        # x, coords = sparse_max_pool_1d(x, coords, kernel_size=4)
 
         torch.cuda.synchronize()
         start_time_1 = time.time()
@@ -432,7 +430,7 @@ class FlatFormer(nn.Module):
         end_time_7 = time.time()
         start_time_8 = time.time()
 
-        # x = self.recover_bev(x, coords, batch_size)
+        x = self.recover_bev(x, coords, batch_size)
 
         torch.cuda.synchronize()
         end_time_8 = time.time()
@@ -448,7 +446,7 @@ class FlatFormer(nn.Module):
         print(f"flatformer= {elapse_1:.2f}, {elapse_2:.2f}, {elapse_3:.2f}, {elapse_4:.2f}, {elapse_5:.2f}, {elapse_6:.2f}, {elapse_7:.2f}, {elapse_8:.2f}")
 
 
-        # return x
+        return x
 
     def _reset_parameters(self):
         for _, p in self.named_parameters():
@@ -466,11 +464,13 @@ class FlatFormer(nn.Module):
 
             # Only include non-empty pillars
             batch_mask = coors[:, 0] == batch_itt
+
             this_coors = coors[batch_mask, :]
             indices = this_coors[:, 2] * nx + this_coors[:, 3]
             indices = indices.type(torch.long)
             voxels = voxel_feat[batch_mask, :]  # [n, c]
             voxels = voxels.t()  # [c, n]
+
             canvas[:, indices] = voxels
             batch_canvas.append(canvas)
 
@@ -487,17 +487,22 @@ from torchsparse.utils.quantize import sparse_quantize
 from torchsparse.utils.tensor_cache import TensorCache
 import time
 
-def generate_random_point_cloud(size, voxel_size):
+def generate_random_point_cloud(size, voxel_size, point_cloud_range):
     pc = np.fromfile(
         "data/n015-2018-07-24-11-22-45+0800__LIDAR_TOP__1532402927647951.pcd.bin",
         dtype=np.float32,
     ).reshape(-1, 5)[:, :4]
     labels = np.random.choice(10, size)
 
+    mask_x = (point_cloud_range[0] <= pc[:, 0]) * (pc[:, 0] <= point_cloud_range[3])
+    mask_y = (point_cloud_range[1] <= pc[:, 1]) * (pc[:, 1] <= point_cloud_range[4])
+    mask_z = (point_cloud_range[2] <= pc[:, 2]) * (pc[:, 2] <= point_cloud_range[5])
+    mask = mask_x * mask_y * mask_z
+    pc = pc[mask]
     coords, feats = pc[:, :3], pc
 
-    # coords[:, [2,1,0]] = coords
-
+    # XYZ to ZYX for flatformers
+    coords[:, [2,1,0]] = coords.copy() # TODO(yoko) How to make it efficient?
 
     coords -= np.min(coords, axis=0, keepdims=True)
 
@@ -530,15 +535,15 @@ def generate_random_point_cloud(size, voxel_size):
     return feed_dict
 
 
-def generate_batched_random_point_clouds(size, voxel_size, batch_size=2):
+def generate_batched_random_point_clouds(size, voxel_size,point_cloud_range, batch_size=2):
     batch = []
     for _ in range(batch_size):
-        batch.append(generate_random_point_cloud(size, voxel_size))
+        batch.append(generate_random_point_cloud(size, voxel_size, point_cloud_range))
     return sparse_collate_fn(batch)
 
 if __name__ == "__main__":
     NUM_PC_CHANNELS = 4
-    VOXEL_SIZE = (0.1, 0.1, 0.1)
+    VOXEL_SIZE = (0.32, 0.32, 6) #(0.1, 0.1, 0.1)
     MAX_X = 200
     MAX_Y = 200
     MAX_Z = 4
@@ -547,6 +552,7 @@ if __name__ == "__main__":
 
     feed_dict = generate_batched_random_point_clouds(size=NUM_PC,
                                                      voxel_size=VOXEL_SIZE,
+                                                     point_cloud_range = [-74.88, -74.88, -2, 74.88, 74.88, 4],
                                                      batch_size=BATCH_SIZE)
 
 
