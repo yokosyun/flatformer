@@ -389,7 +389,6 @@ class FlatFormer(nn.Module):
 
         torch.cuda.synchronize()
         end_time_3 = time.time()
-        start_time_4 = time.time()
 
         # diff = len(mappings["flat2win"]) - len(mappings["win2flat"])
         # x_flat2win = x[mappings["x"]]
@@ -405,45 +404,32 @@ class FlatFormer(nn.Module):
         # x_flat2win = torch.nn.functional.adaptive_max_pool1d(x_flat2win, output_size= 1).squeeze()
         # x_flat2win = x_flat2win.view(batch_size, -1, x_flat2win.shape[-1])
         # print(x_flat2win.shape)
-        # x, coords = sparse_max_pool_1d(x, coords, kernel_size=4)
-        # print(x.shape)
+
+        ### Downsample
+        downsample = True
+        if downsample:
+            x, coords = sparse_max_pool_1d(x, coords, kernel_size=4)
+
+            pe = self.embedding(coords, x.dtype)
+
+            mappings = self.mapping_down(coords, batch_size)
+
+            for _, block in enumerate(self.block_list):
+                x = block(x, pe, mappings)
 
         torch.cuda.synchronize()
-        end_time_4 = time.time()
-        start_time_5 = time.time()
-        # pe = self.embedding(coords, x.dtype)
-
-        torch.cuda.synchronize()
-        end_time_5 = time.time()
-        start_time_6 = time.time()
-        # mappings = self.mapping_down(coords, batch_size)
-
-
-        torch.cuda.synchronize()
-        end_time_6 = time.time()
-        start_time_7 = time.time()
-
-        # for _, block in enumerate(self.block_list):
-        #     x = block(x, pe, mappings)
-
-        torch.cuda.synchronize()
-        end_time_7 = time.time()
-        start_time_8 = time.time()
+        start_time_4 = time.time()
 
         x = self.recover_bev(x, coords, batch_size)
-
+        
         torch.cuda.synchronize()
-        end_time_8 = time.time()
+        end_time_4 = time.time()
         
         elapse_1 =  (end_time_1 - start_time_1) * 1e3
         elapse_2 =  (end_time_2 - start_time_2) * 1e3
         elapse_3 =  (end_time_3 - start_time_3) * 1e3
         elapse_4 =  (end_time_4 - start_time_4) * 1e3
-        elapse_5 =  (end_time_5 - start_time_5) * 1e3
-        elapse_6 =  (end_time_6 - start_time_6) * 1e3
-        elapse_7 =  (end_time_7 - start_time_7) * 1e3
-        elapse_8 =  (end_time_8 - start_time_8) * 1e3
-        print(f"flatformer= {elapse_1:.2f}, {elapse_2:.2f}, {elapse_3:.2f}, {elapse_4:.2f}, {elapse_5:.2f}, {elapse_6:.2f}, {elapse_7:.2f}, {elapse_8:.2f}")
+        print(f"flatformer= {elapse_1:.2f}, {elapse_2:.2f}, {elapse_3:.2f}, {elapse_4:.2f}")
 
 
         return x
@@ -572,4 +558,4 @@ if __name__ == "__main__":
             output = model(inputs.feats, inputs.coords, batch_size=2)
             torch.cuda.synchronize()
             end_time = time.time()
-            # print("Model=", (end_time - start_time) * 1000, "[ms]")
+            print("Model=", (end_time - start_time) * 1000, "[ms]")
