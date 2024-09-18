@@ -326,7 +326,7 @@ class GlobalFormer(nn.Module):
         self.project = torch.nn.Linear(in_channels*2, in_channels)
         self.group_size = group_size
     
-    def forward(self, feats, mappings, batch_size):
+    def forward(self, feats_flat, mappings, batch_size):
         """global transformer must pad to divisible by group size
 
         Args:
@@ -340,22 +340,22 @@ class GlobalFormer(nn.Module):
         Returns:
             _type_: _description_
         """
-        in_length, C = feats.shape
-        diff = len(mappings["flat2win"]) - len(mappings["win2flat"])
-        feats_sort = feats[mappings["x"]]
-        feats_sort = torch.nn.functional.pad(feats_sort, (0,0,0, diff))
-        feats_sort_win = feats_sort[mappings["flat2win"]] # [Lpad, C]
-        feats_sort_win = feats_sort_win.view(-1, self.group_size , C) #[batch*L', group_size, C]
-        feats_sort_win = feats_sort_win.permute((0, 2, 1)) # [batch*L', C, group_size]
-        feats_pool = torch.nn.functional.adaptive_max_pool1d(feats_sort_win, output_size= 1).squeeze() # [batch*L', C]
+        in_length, C = feats_flat.shape
+        indices = mappings["x"]
+        feats_win = feats_flat[indices][mappings["flat2win"]] # [L', C]
+        feats_win = feats_win.view(-1, self.group_size , C) #[batch*L', group_size, C]
+        feats_win = feats_win.permute((0, 2, 1)) # [batch*L', C, group_size]
+        feats_pool = torch.nn.functional.adaptive_max_pool1d(feats_win, output_size= 1).squeeze() # [batch*L', C]
         feats_pool = feats_pool.view(batch_size, -1, C) # [batch, L', C]
-        global_feats = self.transformer(feats_pool)
+        feats_global = self.transformer(feats_pool)
  
-        global_feats = global_feats.unsqueeze(3).repeat(1,1,1, self.group_size)
-        feats_sort_win = feats_sort_win.reshape(batch_size, -1, C, self.group_size)
-        fused_feats = self.project(torch.cat([global_feats, feats_sort_win], dim=2).permute(0,1,3,2))
+        feats_global = feats_global.unsqueeze(3).repeat(1,1,1, self.group_size)
+        feats_win = feats_win.reshape(batch_size, -1, C, self.group_size)
+        feats_fuse = self.project(torch.cat([feats_global, feats_win], dim=2).permute(0,1,3,2))
+        feats_fuse = feats_fuse.view(-1 ,C)
+        feats_flat[indices] = feats_fuse[mappings["win2flat"]]
 
-        return fused_feats # [batch, L', group_size, C]
+        return feats_flat # [L, C]
 
         
 
