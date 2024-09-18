@@ -225,6 +225,7 @@ class FlattenedWindowMapping(nn.Module):
             * self.group_size
         )
         batch_start_indices_p = F.pad(torch.cumsum(num_per_batch_p, dim=0), (1, 0))
+
         flat2win = torch.arange(batch_start_indices_p[-1]).to(coords.device)
         win2flat = torch.arange(batch_start_indices[-1]).to(coords.device)
         for i in range(batch_size):
@@ -329,19 +330,36 @@ class GlobalFormer(nn.Module):
         self.project = torch.nn.Linear(in_channels*2, in_channels)
         self.group_size = group_size
     
-    def forward(self, x, mappings, batch_size):
-        diff = len(mappings["flat2win"]) - len(mappings["win2flat"])
-        x_flat2win = x[mappings["x"]]
-        x_flat2win = torch.nn.functional.pad(x_flat2win, (0,0,0, diff))
-        x_flat2win = x_flat2win[mappings["flat2win"]]
-        x_flat2win = x_flat2win.view(-1, self.group_size ,x_flat2win.shape[1])
-        x_flat2win = x_flat2win.permute((0, 2, 1))
-        x_flat2win = torch.nn.functional.adaptive_max_pool1d(x_flat2win, output_size= 1).squeeze()
-        x_flat2win = x_flat2win.view(batch_size, -1, x_flat2win.shape[-1])
-        global_feats = self.transformer(x_flat2win)
-        fused_feats = self.project(torch.cat([global_feats, x_flat2win], dim=2))
+    def forward(self, feats, mappings, batch_size):
+        """global transformer must pad to divisible by group size
 
-        return fused_feats
+        Args:
+            feats (_type_): [L, C]
+            mappings (_type_):
+                x: [L]
+                flat2win: [Lpad]
+                win2flat: [L]
+            batch_size (_type_): _description_
+
+        Returns:
+            _type_: _description_
+        """
+        in_length, C = feats.shape
+        diff = len(mappings["flat2win"]) - len(mappings["win2flat"])
+        feats_sort = feats[mappings["x"]]
+        feats_sort = torch.nn.functional.pad(feats_sort, (0,0,0, diff))
+        feats_sort_win = feats_sort[mappings["flat2win"]] # [Lpad, C]
+        feats_sort_win = feats_sort_win.view(-1, self.group_size , C) #[batch*L', group_size, C]
+        feats_sort_win = feats_sort_win.permute((0, 2, 1)) # [batch*L', C, group_size]
+        feats_pool = torch.nn.functional.adaptive_max_pool1d(feats_sort_win, output_size= 1).squeeze() # [batch*L', C]
+        feats_pool = feats_pool.view(batch_size, -1, C) # [batch, L', C]
+        global_feats = self.transformer(feats_pool)
+ 
+        global_feats = global_feats.unsqueeze(3).repeat(1,1,1, self.group_size)
+        feats_sort_win = feats_sort_win.reshape(batch_size, -1, C, self.group_size)
+        fused_feats = self.project(torch.cat([global_feats, feats_sort_win], dim=2).permute(0,1,3,2))
+
+        return fused_feats # [batch, L', group_size, C]
 
         
 
@@ -509,7 +527,6 @@ def generate_random_point_cloud(size, voxel_size, point_cloud_range):
     torch.cuda.synchronize()
     end_time = time.time()
     print("quantization=", (end_time - start_time) * 1000, "[ms]")
-
 
     # print(coords.shape, indices.shape)
     # coords = coords[:-1]
