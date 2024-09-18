@@ -346,13 +346,10 @@ class GlobalFormer(nn.Module):
         feats_win = feats_win.view(-1, self.group_size , C) #[batch*L', group_size, C]
         feats_win = feats_win.permute((0, 2, 1)) # [batch*L', C, group_size]
         feats_pool = torch.nn.functional.adaptive_max_pool1d(feats_win, output_size= 1).squeeze() # [batch*L', C]
-        feats_pool = feats_pool.view(batch_size, -1, C) # [batch, L', C]
-        feats_global = self.transformer(feats_pool)
- 
-        feats_global = feats_global.unsqueeze(3).repeat(1,1,1, self.group_size)
-        feats_win = feats_win.reshape(batch_size, -1, C, self.group_size)
-        feats_fuse = self.project(torch.cat([feats_global, feats_win], dim=2).permute(0,1,3,2))
-        feats_fuse = feats_fuse.view(-1 ,C)
+        feats_global = self.transformer(feats_pool.view(batch_size, -1, C)).view(-1, C)
+
+        feats_global = feats_global.unsqueeze(2).repeat(1,1,self.group_size) 
+        feats_fuse = self.project(torch.cat([feats_global, feats_win], dim=1).permute(0,2,1)).view(-1 ,C)
         feats_flat[indices] = feats_fuse[mappings["win2flat"]]
 
         return feats_flat # [L, C]
