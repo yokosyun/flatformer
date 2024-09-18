@@ -212,6 +212,14 @@ class FlattenedWindowMapping(nn.Module):
         self.group_size = group_size
 
     def forward(self, coords: torch.Tensor, batch_size: int) -> Dict[str, torch.Tensor]:
+        """pad group size
+
+        Returns:
+            Dict[str, Tensor]: mappings
+                flat2win: L'[0,1,2...L'] - pad_pre_batch_group_size[0, pad_for_batch0,...,pad_for_batch_N-1] 
+                win2flat: L [0,1,2...L] + pad_pre_batch_group_size[0, pad_for_batch0,...,pad_for_batch_N-1]
+        """
+
         coords = coords.long()
 
         _, num_per_batch = torch.unique(coords[:, 0], sorted=False, return_counts=True)
@@ -230,20 +238,15 @@ class FlattenedWindowMapping(nn.Module):
         win2flat = torch.arange(batch_start_indices[-1]).to(coords.device)
         
         for i in range(batch_size):
-            pad_group_size = batch_start_indices_p[i] - batch_start_indices[i]
-            win2flat[batch_start_indices[i] : batch_start_indices[i + 1]] += pad_group_size
+            pad_pre_batch_group_size = batch_start_indices_p[i] - batch_start_indices[i]
+            win2flat[batch_start_indices[i] : batch_start_indices[i + 1]] += pad_pre_batch_group_size
             if num_per_batch[i] != num_per_batch_p[i]:
-                flat2win[
-                    batch_start_indices_p[i + 1]
-                    - self.group_size
-                    + (num_per_batch[i] % self.group_size) : batch_start_indices_p[i + 1]
-                ] = flat2win[
-                    batch_start_indices_p[i + 1]
-                    - 2 * self.group_size
-                    + (num_per_batch[i] % self.group_size) : batch_start_indices_p[i + 1]
-                    - self.group_size
-                ]
-            flat2win[batch_start_indices_p[i] : batch_start_indices_p[i + 1]] -= pad_group_size
+                pad_group_size = num_per_batch_p[i] - num_per_batch[i]
+                batch_end_idx = batch_start_indices_p[i + 1] - pad_group_size
+                # copy previous group for padding area
+                flat2win[batch_end_idx : batch_start_indices_p[i + 1]] = flat2win[
+                    batch_end_idx - self.group_size : batch_start_indices_p[i + 1] - self.group_size]
+            flat2win[batch_start_indices_p[i] : batch_start_indices_p[i + 1]] -= pad_pre_batch_group_size
 
         mappings = {"flat2win": flat2win, "win2flat": win2flat}
         for shifted in [False, True]:
