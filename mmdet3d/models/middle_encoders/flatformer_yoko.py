@@ -333,15 +333,12 @@ class GlobalFormer(nn.Module):
         diff = len(mappings["flat2win"]) - len(mappings["win2flat"])
         x_flat2win = x[mappings["x"]]
         x_flat2win = torch.nn.functional.pad(x_flat2win, (0,0,0, diff))
-        # print(x_flat2win.shape, mappings["flat2win"].shape)
         x_flat2win = x_flat2win[mappings["flat2win"]]
         x_flat2win = x_flat2win.view(-1, self.group_size ,x_flat2win.shape[1])
-        # print(x_flat2win.shape, mappings["flat2win"].shape)
         x_flat2win = x_flat2win.permute((0, 2, 1))
         x_flat2win = torch.nn.functional.adaptive_max_pool1d(x_flat2win, output_size= 1).squeeze()
         x_flat2win = x_flat2win.view(batch_size, -1, x_flat2win.shape[-1])
         global_feats = self.transformer(x_flat2win)
-        # print(global_feats.shape, x.shape, x_flat2win.shape)
         fused_feats = self.project(torch.cat([global_feats, x_flat2win], dim=2))
 
         return fused_feats
