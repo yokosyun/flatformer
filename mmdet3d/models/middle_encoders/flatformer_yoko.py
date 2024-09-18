@@ -228,10 +228,10 @@ class FlattenedWindowMapping(nn.Module):
 
         flat2win = torch.arange(batch_start_indices_p[-1]).to(coords.device)
         win2flat = torch.arange(batch_start_indices[-1]).to(coords.device)
+        
         for i in range(batch_size):
-            win2flat[batch_start_indices[i] : batch_start_indices[i + 1]] += (
-                batch_start_indices_p[i] - batch_start_indices[i]
-            )
+            pad_group_size = batch_start_indices_p[i] - batch_start_indices[i]
+            win2flat[batch_start_indices[i] : batch_start_indices[i + 1]] += pad_group_size
             if num_per_batch[i] != num_per_batch_p[i]:
                 flat2win[
                     batch_start_indices_p[i + 1]
@@ -243,9 +243,7 @@ class FlattenedWindowMapping(nn.Module):
                     + (num_per_batch[i] % self.group_size) : batch_start_indices_p[i + 1]
                     - self.group_size
                 ]
-            flat2win[batch_start_indices_p[i] : batch_start_indices_p[i + 1]] -= (
-                batch_start_indices_p[i] - batch_start_indices[i]
-            )
+            flat2win[batch_start_indices_p[i] : batch_start_indices_p[i + 1]] -= pad_group_size
 
         mappings = {"flat2win": flat2win, "win2flat": win2flat}
         for shifted in [False, True]:
