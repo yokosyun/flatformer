@@ -393,8 +393,6 @@ class FlatFormer(nn.Module):
         self.output_shape = output_shape
         # self.output_shape = (output_shape[0]//4,output_shape[1]//4)
 
-        self.attn = torch.nn.MultiheadAttention(in_channels, num_heads, batch_first=True)
-
         self.global_former = GlobalFormer(in_channels, num_heads, group_size)
 
     @auto_fp16(apply_to=('x',))
