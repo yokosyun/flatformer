@@ -322,6 +322,31 @@ class PositionalEmbedding(nn.Module):
         inv_freq = self.pos_temperature ** (2 * (inv_freq // 2) / pos_length)
         return inv_freq
 
+class GlobalFormer(nn.Module):
+    def __init__(self, in_channels, num_heads, group_size):
+        super().__init__()
+        self.transformer = torch.nn.TransformerEncoderLayer(d_model=in_channels, nhead=num_heads, batch_first=True)
+        self.project = torch.nn.Linear(in_channels*2, in_channels)
+        self.group_size = group_size
+    
+    def forward(self, x, mappings, batch_size):
+        diff = len(mappings["flat2win"]) - len(mappings["win2flat"])
+        x_flat2win = x[mappings["x"]]
+        x_flat2win = torch.nn.functional.pad(x_flat2win, (0,0,0, diff))
+        # print(x_flat2win.shape, mappings["flat2win"].shape)
+        x_flat2win = x_flat2win[mappings["flat2win"]]
+        x_flat2win = x_flat2win.view(-1, self.group_size ,x_flat2win.shape[1])
+        # print(x_flat2win.shape, mappings["flat2win"].shape)
+        x_flat2win = x_flat2win.permute((0, 2, 1))
+        x_flat2win = torch.nn.functional.adaptive_max_pool1d(x_flat2win, output_size= 1).squeeze()
+        x_flat2win = x_flat2win.view(batch_size, -1, x_flat2win.shape[-1])
+        global_feats = self.transformer(x_flat2win)
+        # print(global_feats.shape, x.shape, x_flat2win.shape)
+        fused_feats = self.project(torch.cat([global_feats, x_flat2win], dim=2))
+
+        return fused_feats
+
+        
 
 # @MIDDLE_ENCODERS.register_module()
 class FlatFormer(nn.Module):
@@ -336,8 +361,8 @@ class FlatFormer(nn.Module):
         output_shape=(468, 468),
         pos_temperature=10000,
         normalize_pos=False,
-        # group_size=69,
-        group_size=64,
+        group_size=69,
+        # group_size=64,
         # group_size=128,
         # group_size=256,
     ) -> None:
@@ -368,6 +393,10 @@ class FlatFormer(nn.Module):
         self.output_shape = output_shape
         # self.output_shape = (output_shape[0]//4,output_shape[1]//4)
 
+        self.attn = torch.nn.MultiheadAttention(in_channels, num_heads, batch_first=True)
+
+        self.global_former = GlobalFormer(in_channels, num_heads, group_size)
+
     @auto_fp16(apply_to=('x',))
     def forward(self, x, coords, batch_size):
 
@@ -390,23 +419,8 @@ class FlatFormer(nn.Module):
         torch.cuda.synchronize()
         end_time_3 = time.time()
 
-        # diff = len(mappings["flat2win"]) - len(mappings["win2flat"])
-        # x_flat2win = x[mappings["x"]]
-        # print(x_flat2win.shape)
-        # x_flat2win = torch.nn.functional.pad(x_flat2win, (0,0,0, diff))
-        # print(x_flat2win.shape)
-        # x_flat2win = x_flat2win[mappings["flat2win"]]
-        # print(x_flat2win.shape)
-        # x_flat2win = x_flat2win.view(-1 ,64,x_flat2win.shape[1])
-        # print(x_flat2win.shape)
-        # x_flat2win = x_flat2win.permute((0, 2, 1))
-        # print(x_flat2win.shape)
-        # x_flat2win = torch.nn.functional.adaptive_max_pool1d(x_flat2win, output_size= 1).squeeze()
-        # x_flat2win = x_flat2win.view(batch_size, -1, x_flat2win.shape[-1])
-        # print(x_flat2win.shape)
-
         ### Downsample
-        downsample = True
+        downsample = False
         if downsample:
             x, coords = sparse_max_pool_1d(x, coords, kernel_size=4)
 
@@ -416,6 +430,8 @@ class FlatFormer(nn.Module):
 
             for _, block in enumerate(self.block_list):
                 x = block(x, pe, mappings)
+
+        self.global_former(x, mappings, batch_size)
 
         torch.cuda.synchronize()
         start_time_4 = time.time()
