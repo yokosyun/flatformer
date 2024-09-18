@@ -125,7 +125,6 @@ class BasicLayer(nn.Module):
         src = self.norm2(src + self.fc2(self.act(self.fc1(src))))              
         return src
 
-
 class BasicBlock(nn.Module):
     def __init__(
         self,
@@ -145,25 +144,21 @@ class BasicBlock(nn.Module):
             )
             self.block.append(layer)
 
-    def forward(self, x: torch.Tensor, pe: torch.Tensor, mappings: Dict[str, Any]) -> torch.Tensor:
+    def forward(self, x_flat: torch.Tensor, pe: torch.Tensor, mappings: Dict[str, Any]) -> torch.Tensor:
         for k, name in enumerate(["x", "x_shift", "y", "y_shift"]):
             indices = mappings[name]
             
-            diff = len(mappings["flat2win"]) - len(mappings["win2flat"])
-            
-            x_flat2win = x[indices]            
-            x_flat2win = torch.nn.functional.pad(x_flat2win, (0,0,0, diff))
-            x_flat2win = x_flat2win[mappings["flat2win"]]
+            # flat2win
+            x_win = x_flat[indices][mappings["flat2win"]]
+            pe_win = pe[indices][mappings["flat2win"]]
 
-            pe_flat2win =pe[indices]
-            pe_flat2win = torch.nn.functional.pad(pe_flat2win, (0,0,0, diff))
-            pe_flat2win = pe_flat2win[mappings["flat2win"]]
+            # Transformer
+            out_win = self.block[k](x_win, pe_win)
 
-            block = self.block[k]
-            out = block(x_flat2win, pe_flat2win)
-            x[indices] = out[mappings["win2flat"]]
+            # win2flat
+            x_flat[indices] = out_win[mappings["win2flat"]]
 
-        return x
+        return x_flat
 
 
 def _get_activation_fn(activation):
