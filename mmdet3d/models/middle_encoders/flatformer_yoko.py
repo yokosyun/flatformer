@@ -243,7 +243,7 @@ class FlattenedWindowMapping(nn.Module):
                     batch_end_idx - self.group_size : batch_start_indices_p[i + 1] - self.group_size]
             flat2win[batch_start_indices_p[i] : batch_start_indices_p[i + 1]] -= pad_pre_batch_group_size
 
-        mappings = {"flat2win": flat2win, "win2flat": win2flat}
+        mappings = {"flat2win": flat2win, "win2flat": win2flat, "batch_start_indices_p": batch_start_indices_p}
         for shifted in [False, True]:
             (
                 n2,
@@ -346,8 +346,15 @@ class GlobalFormer(nn.Module):
         feats_win = feats_win.view(-1, self.group_size , C) #[batch*L', group_size, C]
         feats_win = feats_win.permute((0, 2, 1)) # [batch*L', C, group_size]
         feats_pool = torch.nn.functional.adaptive_max_pool1d(feats_win, output_size= 1).squeeze() # [batch*L', C]
-        feats_global = self.transformer(feats_pool.view(batch_size, -1, C)).view(-1, C)
 
+
+        pool_start_idxs = mappings["batch_start_indices_p"] // self.group_size
+        feats_list = []
+        for b_idx in range(batch_size):
+            feats_list.append(feats_pool[pool_start_idxs[b_idx]:pool_start_idxs[b_idx+1]])
+        feats_pool = pad_sequence(feats_list, batch_first=True)
+
+        feats_global = self.transformer(feats_pool).view(-1, C)
         feats_global = feats_global.unsqueeze(2).repeat(1,1,self.group_size) 
         feats_fuse = self.project(torch.cat([feats_global, feats_win], dim=1).permute(0,2,1)).view(-1 ,C)
         feats_flat[indices] = feats_fuse[mappings["win2flat"]]
