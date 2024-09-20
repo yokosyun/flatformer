@@ -243,7 +243,7 @@ class FlattenedWindowMapping(nn.Module):
                     batch_end_idx - self.group_size : batch_start_indices_p[i + 1] - self.group_size]
             flat2win[batch_start_indices_p[i] : batch_start_indices_p[i + 1]] -= pad_pre_batch_group_size
 
-        mappings = {"flat2win": flat2win, "win2flat": win2flat}
+        mappings = {"flat2win": flat2win, "win2flat": win2flat, "batch_start_indices_p": batch_start_indices_p}
         for shifted in [False, True]:
             (
                 n2,
@@ -330,15 +330,15 @@ class GlobalFormer(nn.Module):
         """global transformer must pad to divisible by group size
 
         Args:
-            feats (_type_): [L, C]
-            mappings (_type_):
+            feats_flat (Tensor): input feature [L, C]
+            mappings (Dict[str, Tensor]):
                 x: [L]
                 flat2win: [Lpad]
                 win2flat: [L]
-            batch_size (_type_): _description_
+            batch_size (int):
 
         Returns:
-            _type_: _description_
+            Tensor: output feature [L, C]
         """
         in_length, C = feats_flat.shape
         indices = mappings["x"]
@@ -346,9 +346,23 @@ class GlobalFormer(nn.Module):
         feats_win = feats_win.view(-1, self.group_size , C) #[batch*L', group_size, C]
         feats_win = feats_win.permute((0, 2, 1)) # [batch*L', C, group_size]
         feats_pool = torch.nn.functional.adaptive_max_pool1d(feats_win, output_size= 1).squeeze() # [batch*L', C]
-        feats_global = self.transformer(feats_pool.view(batch_size, -1, C)).view(-1, C)
 
-        feats_global = feats_global.unsqueeze(2).repeat(1,1,self.group_size) 
+
+        pool_start_idxs = mappings["batch_start_indices_p"] // self.group_size
+        feats_list = []
+        for b_idx in range(batch_size):
+            feats_list.append(feats_pool[pool_start_idxs[b_idx]:pool_start_idxs[b_idx+1]])
+        
+        feats_pool = pad_sequence(feats_list, batch_first=True)
+        
+        sequece_sizes = (pool_start_idxs[1:] - pool_start_idxs[:-1])
+        padding_mask = torch.zeros(feats_pool.shape[:2], device=feats_pool.device, dtype=torch.bool)
+        for b_idx, seq_size in enumerate(sequece_sizes):
+            padding_mask[b_idx, :seq_size] = 1
+
+        feats_global = self.transformer(feats_pool, src_key_padding_mask=padding_mask)[padding_mask]
+        feats_global = feats_global.unsqueeze(2).repeat(1,1,self.group_size)
+
         feats_fuse = self.project(torch.cat([feats_global, feats_win], dim=1).permute(0,2,1)).view(-1 ,C)
         feats_flat[indices] = feats_fuse[mappings["win2flat"]]
 
@@ -421,6 +435,7 @@ class FlatFormer(nn.Module):
         start_time_3 = time.time()
         for _, block in enumerate(self.block_list):
             x = block(x, pe, mappings)
+            x = self.global_former(x, mappings, batch_size)
 
         torch.cuda.synchronize()
         end_time_3 = time.time()
@@ -436,8 +451,6 @@ class FlatFormer(nn.Module):
 
             for _, block in enumerate(self.block_list):
                 x = block(x, pe, mappings)
-
-        self.global_former(x, mappings, batch_size)
 
         torch.cuda.synchronize()
         start_time_4 = time.time()
